@@ -23,7 +23,7 @@ module Scheme.Evaluator
   ) where
 
 import Scheme.Core (Environment, Value(..), SchemeError(..))
-import Scheme.Environment (lookupVar, lookupVarWithRecursion, extendEnv)
+import Scheme.Environment (lookupVar, lookupVarWithRecursion, extendEnv, setVar)
 import Scheme.FreeVars (freeVarsInBody, captureFreeVars)
 import Scheme.Builtins
 import Data.Text (Text)
@@ -45,6 +45,7 @@ specialForms = Map.fromList
   , (T.pack "let", evaluateLet)
   , (T.pack "cond", evaluateCond)
   , (T.pack "begin", evaluateBegin)
+  , (T.pack "set!", evaluateSet)
   -- Add more as needed
   ]
 
@@ -58,7 +59,10 @@ evaluate env val = case val of
   Nil -> Right val
   
   -- Variable lookup
-  Symbol name -> lookupVarWithRecursion env name
+  Symbol name -> case name of
+    s | s == T.pack "#t" -> Right $ Bool True
+    s | s == T.pack "#f" -> Right $ Bool False
+    _ -> lookupVarWithRecursion env name
   
   -- Quoted expressions
   Quote expr -> Right expr
@@ -97,13 +101,12 @@ evaluateDefine :: Environment -> [Value] -> Either SchemeError Value
 evaluateDefine env [Symbol name, expr] = do
   val <- evaluate env expr
   Right $ Symbol name  -- Return the symbol name
-evaluateDefine env [List (Symbol name:params), body] = do
+evaluateDefine env (List (Symbol name:params):bodyExprs) = do
   paramNames <- mapM extractSymbol params
-  -- Find free variables in the function body
-  let freeVarSet = freeVarsInBody [body] paramNames
-  -- Create minimal environment with only referenced variables
-  let minimalEnv = captureFreeVars env freeVarSet
-  let func = OptimizedFunction name [body] paramNames minimalEnv
+  let body = if length bodyExprs == 1 
+             then head bodyExprs 
+             else List (Symbol (T.pack "begin") : bodyExprs)
+  let func = RecursiveFunction name [body] paramNames env
   Right $ Symbol name
 evaluateDefine _ args = Left $ WrongNumberOfArgs (T.pack "define") (length args) 2
 
@@ -111,32 +114,36 @@ evaluateDefine _ args = Left $ WrongNumberOfArgs (T.pack "define") (length args)
 evaluateLambda :: Environment -> [Value] -> Either SchemeError Value
 evaluateLambda env [List params, body] = do
   paramNames <- mapM extractSymbol params
-  -- Find free variables in the function body
-  let freeVarSet = freeVarsInBody [body] paramNames
-  -- Create minimal environment with only referenced variables
-  let minimalEnv = captureFreeVars env freeVarSet
-  Right $ OptimizedFunction (T.pack "lambda") [body] paramNames minimalEnv
+  let func = RecursiveFunction (T.pack "lambda") [body] paramNames env
+  Right func
 evaluateLambda _ args = Left $ WrongNumberOfArgs (T.pack "lambda") (length args) 2
 
 -- | Evaluate a let expression
 evaluateLet :: Environment -> [Value] -> Either SchemeError Value
-evaluateLet env [List bindings, body] = do
-  let newEnv = extendEnv env []
-  evaluate newEnv body
-evaluateLet _ args = Left $ WrongNumberOfArgs (T.pack "let") (length args) 2
+evaluateLet env args = case args of
+  [Nil, body] -> do
+    let newEnv = extendEnv env []
+    evaluate newEnv body
+  [List bindings, body] -> do
+    let newEnv = extendEnv env []
+    evaluate newEnv body
+  _ -> Left $ RuntimeError $ "Let: unexpected arguments: " ++ show args
 
 -- | Evaluate a cond expression
+-- Now supports arbitrary test expressions and 'else' clause
 evaluateCond :: Environment -> [Value] -> Either SchemeError Value
 evaluateCond env [] = Right Nil
-evaluateCond env (List (Symbol s:exprs):rest)
-  | s == T.pack "else" = mapM (evaluate env) exprs >>= return . last
-  | otherwise = do
-      condVal <- evaluate env (Symbol s)
+evaluateCond env (List (testExpr:exprs):rest) =
+  case testExpr of
+    Symbol s | s == T.pack "else" -> mapM (evaluate env) exprs >>= return . last
+    _ -> do
+      condVal <- evaluate env testExpr
       case condVal of
         Bool False -> evaluateCond env rest
         Nil -> evaluateCond env rest
         _ -> mapM (evaluate env) exprs >>= return . last
-evaluateCond _ args = Left $ RuntimeError "Invalid cond clause"
+evaluateCond env (List []:rest) = evaluateCond env rest
+evaluateCond _ args = Left $ RuntimeError $ "Invalid cond clause: " ++ show args
 
 -- | Evaluate a begin expression
 evaluateBegin :: Environment -> [Value] -> Either SchemeError Value
@@ -145,30 +152,13 @@ evaluateBegin env exprs = mapM (evaluate env) exprs >>= return . last
 -- | Evaluate a function application
 evaluateApplication :: Environment -> Value -> [Value] -> Either SchemeError Value
 evaluateApplication env func args = do
-  -- Evaluate the function
   funcVal <- evaluate env func
-  
-  -- Evaluate all arguments
   evalArgs <- mapM (evaluate env) args
-  
-  -- Apply the function
   case funcVal of
     Primitive _ primFunc -> primFunc evalArgs
     Function name body params funcEnv -> applyFunction name body params funcEnv evalArgs
     RecursiveFunction name body params funcEnv -> applyFunction name body params funcEnv evalArgs
-    OptimizedFunction name body params freeVars -> applyOptimizedFunction name body params freeVars evalArgs
     _ -> Left $ TypeError $ "Not a function: " ++ show funcVal
-
--- | Apply an optimized user-defined function
-applyOptimizedFunction :: Text -> [Value] -> [Text] -> Environment -> [Value] -> Either SchemeError Value
-applyOptimizedFunction name body params freeVars args
-  | length params /= length args = 
-      Left $ WrongNumberOfArgs name (length args) (length params)
-  | otherwise = do
-      -- Create environment with parameters and free variables
-      let paramEnv = zip params args
-      let newEnv = paramEnv ++ freeVars  -- Parameters shadow free variables
-      mapM (evaluate newEnv) body >>= return . last
 
 -- | Apply a user-defined function
 applyFunction :: Text -> [Value] -> [Text] -> Environment -> [Value] -> Either SchemeError Value
@@ -176,14 +166,20 @@ applyFunction name body params funcEnv args
   | length params /= length args = 
       Left $ WrongNumberOfArgs name (length args) (length params)
   | otherwise = do
-      let newEnv = extendEnv funcEnv (zip params args)
-      -- For recursive functions, ensure the function itself is available in the environment
-      let finalEnv = case lookupVar funcEnv name of
-            Right (RecursiveFunction _ body' params' _) -> 
-              extendEnv newEnv [(name, RecursiveFunction name body' params' funcEnv)]
-            Right _ -> newEnv
-            Left _ -> newEnv
+      -- Always start from the closure's environment, which already includes the self-binding
+      let paramEnv = zip params args
+      let finalEnv = paramEnv ++ funcEnv
       mapM (evaluate finalEnv) body >>= return . last
+
+-- | Evaluate a set! expression
+-- Note: This does not update the environment in-place; the REPL/eval loop must handle the new environment.
+evaluateSet :: Environment -> [Value] -> Either SchemeError Value
+evaluateSet env [Symbol name, expr] = do
+  val <- evaluate env expr
+  _ <- setVar env name val  -- This returns the new environment, but we ignore it here
+  return val
+
+evaluateSet _ args = Left $ WrongNumberOfArgs (T.pack "set!") (length args) 2
 
 -- | Helper function to extract symbol from a value
 extractSymbol :: Value -> Either SchemeError Text
