@@ -1,0 +1,6 @@
+(display "Testing define...")
+(newline)
+(define x 42)
+(display "x = ")
+(display x)
+(newline) 

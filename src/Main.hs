@@ -24,6 +24,7 @@ import Scheme.Parser
 import Scheme.Core (Value(..), SchemeError(..), Environment)
 import Scheme.Environment (defineVar, lookupVar)
 import Scheme.Evaluator (applyFunction)
+import Scheme.DefineHandler (handleDefine)
 import System.IO
 import System.Environment
 import Data.Text (Text)
@@ -64,34 +65,71 @@ loop env = do
         Right expr ->
           case handleDefine env expr of
             Left err -> putStrLn ("Error: " ++ show err) >> loop env
-            Right (newEnv, val) -> putStrLn (show val) >> loop newEnv
+            Right (newEnv, val) -> 
+              case val of
+                List (Symbol s:args)
+                  | s == T.pack "inspect" -> case args of
+                      [Symbol name] -> do
+                        case lookupVar newEnv name of
+                          Left err -> putStrLn ("Variable not found: " ++ show err) >> loop newEnv
+                          Right val -> putStrLn (show val) >> loop newEnv
+                      _ -> putStrLn "Error: inspect requires one symbol argument" >> loop newEnv
+                  | s == T.pack "tokens" -> case args of
+                      [String input] -> do
+                        case tokenize (T.unpack input) of
+                          Left err -> putStrLn ("Tokenization error: " ++ show err) >> loop newEnv
+                          Right tokens -> putStrLn ("Tokens: " ++ show tokens) >> loop newEnv
+                      _ -> putStrLn "Error: tokens requires one string argument" >> loop newEnv
+                  | otherwise -> putStrLn (show val) >> loop newEnv
+                _ -> putStrLn (show val) >> loop newEnv
 
 -- | Handle define expressions by updating the environment
-handleDefine :: Environment -> Value -> Either SchemeError (Environment, Value)
-handleDefine env (List (Symbol s:args))
-  | s == T.pack "define" = case args of
-      [Symbol name, expr] -> do
-        -- Step 1: Insert a placeholder
-        let placeholder = Nil
-        let envWithPlaceholder = defineVar env name placeholder
-        -- Step 2: Evaluate the lambda in the environment with the placeholder
-        val <- eval envWithPlaceholder expr
-        -- Step 3: If it's a function, create a recursive function
-        let finalVal = case val of
-              Function _ body params _ -> RecursiveFunction name body params envWithPlaceholder
-              _ -> val
-        -- Step 4: Replace the placeholder with the actual function in the same environment
-        let newEnv = replaceVar envWithPlaceholder name finalVal
-        return (newEnv, Symbol name)
-      _ -> Left $ WrongNumberOfArgs (T.pack "define") (length args) 2
-  | s == T.pack "inspect" = case args of
-      [Symbol name] -> do
-        case lookupVar env name of
-          Left err -> return (env, String $ T.pack $ "Variable not found: " ++ show err)
-          Right val -> return (env, val)
-      _ -> Left $ WrongNumberOfArgs (T.pack "inspect") (length args) 1
-  | otherwise = eval env (List (Symbol s:args)) >>= \val -> return (env, val)
-handleDefine env expr = eval env expr >>= \val -> return (env, val)
+-- handleDefine env (List (Symbol s:args))
+--   | s == T.pack "define" = case args of
+--       [Symbol name, expr] -> do
+--         -- Step 1: Insert a placeholder
+--         let placeholder = Nil
+--         let envWithPlaceholder = defineVar env name placeholder
+--         -- Step 2: Evaluate the lambda in the environment with the placeholder
+--         val <- eval envWithPlaceholder expr
+--         -- Step 3: If it's a function, create a recursive function
+--         let finalVal = case val of
+--               Function _ body params _ -> RecursiveFunction name body params envWithPlaceholder
+--               OptimizedFunction _ body params freeVars -> 
+--                 -- For recursive optimized functions, we need to include the function itself
+--                 let recursiveFreeVars = (name, RecursiveFunction name body params envWithPlaceholder) : freeVars
+--                 in OptimizedFunction name body params recursiveFreeVars
+--               _ -> val
+--         -- Step 4: Replace the placeholder with the actual function in the same environment
+--         let newEnv = replaceVar envWithPlaceholder name finalVal
+--         return (newEnv, Symbol name)
+--       [List (Symbol name:params), body] -> do
+--         -- Function definition: (define (name params) body)
+--         paramNames <- mapM extractSymbol params
+--         -- Find free variables in the function body
+--         let freeVarSet = freeVarsInBody [body] paramNames
+--         -- Create minimal environment with only referenced variables
+--         let minimalEnv = captureFreeVars env freeVarSet
+--         -- Create the optimized function
+--         let func = OptimizedFunction name [body] paramNames minimalEnv
+--         -- Add to environment
+--         let newEnv = defineVar env name func
+--         return (newEnv, Symbol name)
+--       _ -> Left $ WrongNumberOfArgs (T.pack "define") (length args) 2
+--   | s == T.pack "inspect" = case args of
+--       [Symbol name] -> do
+--         case lookupVar env name of
+--           Left err -> return (env, String $ T.pack $ "Variable not found: " ++ show err)
+--           Right val -> return (env, val)
+--       _ -> Left $ WrongNumberOfArgs (T.pack "inspect") (length args) 1
+--   | s == T.pack "tokens" = case args of
+--       [String input] -> do
+--         case tokenize (T.unpack input) of
+--           Left err -> return (env, String $ T.pack $ "Tokenization error: " ++ show err)
+--           Right tokens -> return (env, String $ T.pack $ "Tokens: " ++ show tokens)
+--       _ -> Left $ WrongNumberOfArgs (T.pack "tokens") (length args) 1
+--   | otherwise = eval env (List (Symbol s:args)) >>= \val -> return (env, val)
+-- handleDefine env expr = eval env expr >>= \val -> return (env, val)
 
 -- | Replace a variable in the environment (assumes it exists)
 replaceVar :: Environment -> Text -> Value -> Environment

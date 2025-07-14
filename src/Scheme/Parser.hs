@@ -29,10 +29,22 @@ import Text.Parsec hiding (parse)
 import Text.Parsec.String (Parser)
 import Text.Parsec.Char
 import Text.Parsec.Combinator
+import Control.Monad (void)
 
--- | Lexeme combinator: parses p and skips trailing whitespace/comments
+-- | Inter-token space: whitespace or comments
+interTokenSpace :: Parser ()
+interTokenSpace = skipMany (skipMany1 space <|> comment)
+
+-- | Parse and skip a comment
+comment :: Parser ()
+comment = do
+  _ <- char ';'
+  _ <- manyTill anyChar (void endOfLine <|> eof)
+  return ()
+
+-- | Lexeme combinator: parses p and skips trailing inter-token space
 lexeme :: Parser a -> Parser a
-lexeme p = p <* skipWhitespaceOrComment
+lexeme p = p <* interTokenSpace
 
 -- | Parse a Scheme expression from a string (now parses all forms and returns the last)
 parse :: String -> Either SchemeError Value
@@ -44,7 +56,7 @@ parse input =
 
 -- | Parse a Scheme file with multiple top-level forms
 schemeFile :: Parser [Value]
-schemeFile = skipWhitespaceOrComment *> sepEndBy schemeExpression skipWhitespaceOrComment <* eof
+schemeFile = interTokenSpace *> sepEndBy schemeExpression interTokenSpace <* eof
 
 -- | Parse multiple Scheme expressions from a string
 parseMany :: String -> Either SchemeError [Value]
@@ -53,85 +65,78 @@ parseMany input =
     Left err -> Left $ ParseError $ show err
     Right exprs -> Right exprs
 
--- | Skip whitespace and comments
-skipWhitespaceOrComment :: Parser ()
-skipWhitespaceOrComment = skipMany (skipMany1 space <|> comment)
-
--- | Parse and skip a comment
-comment :: Parser ()
-comment = do
-  _ <- char ';'
-  _ <- manyTill anyChar (try (endOfLine >> return ()) <|> (eof >> return ()))
-  return ()
-
 -- | Parse a Scheme expression
 schemeExpression :: Parser Value
 schemeExpression = choice
-  [ selfEvaluating
-  , quotedExpression
-  , listExpression
-  , symbolExpression
+  [ lexeme boolean
+  , lexeme number
+  , lexeme stringLiteral
+  , lexeme quoted
+  , lexeme listExpression
+  , lexeme symbol
   ]
 
--- | Parse self-evaluating expressions
-selfEvaluating :: Parser Value
-selfEvaluating = choice
-  [ lexeme (Number <$> number)
-  , lexeme (String <$> stringLiteral)
-  , lexeme (Bool <$> boolean)
-  ]
-
--- | Parse a quoted expression
-quotedExpression :: Parser Value
-quotedExpression = do
-  _ <- char '\''
-  skipWhitespaceOrComment
-  expr <- schemeExpression
-  return $ Quote expr
-
--- | Parse a list expression
-listExpression :: Parser Value
-listExpression = do
-  _ <- char '('
-  skipWhitespaceOrComment
-  elements <- sepEndBy schemeExpression skipWhitespaceOrComment
-  _ <- char ')'
-  return $ case elements of
-    [] -> Nil
-    _ -> List elements
-
--- | Parse a symbol
-symbolExpression :: Parser Value
-symbolExpression = lexeme (Symbol <$> symbol)
-
--- | Parse a string literal
-stringLiteral :: Parser Text
-stringLiteral = do
-  char '"'
-  content <- many (noneOf "\"")
-  char '"'
-  return $ T.pack content
-
--- | Parse a number
-number :: Parser Double
-number = do
+-- | Parse a number for tokenization (returns Double)
+numberToken :: Parser Double
+numberToken = do
   digits <- many1 digit
   decimal <- option "" (char '.' >> many1 digit)
   return $ read (digits ++ decimal)
 
+-- | Parse a number
+number :: Parser Value
+number = Number <$> numberToken
+
 -- | Parse a boolean literal
-boolean :: Parser Bool
+boolean :: Parser Value
 boolean = choice
-  [ string "#t" >> return True
-  , string "#f" >> return False
+  [ try (string "#t") >> return (Bool True)
+  , try (string "#f") >> return (Bool False)
   ]
 
--- | Parse a symbol
-symbol :: Parser Text
+-- | Parse a string literal
+stringLiteral :: Parser Value
+stringLiteral = do
+  char '"'
+  content <- many (noneOf "\"")
+  char '"'
+  return $ String $ T.pack content
+
+-- | Parse a quoted expression
+quoted :: Parser Value
+quoted = do
+  _ <- char '\''
+  expr <- schemeExpression
+  return $ Quote expr
+
+-- | Parse a list expression (supports both () and [])
+listExpression :: Parser Value
+listExpression = parens <|> brackets
+
+-- | Parse parentheses list
+parens :: Parser Value
+parens = do
+  _ <- char '('
+  interTokenSpace
+  xs <- sepEndBy schemeExpression interTokenSpace
+  _ <- char ')'
+  return $ if null xs then Nil else List xs
+
+-- | Parse bracket list
+brackets :: Parser Value
+brackets = do
+  _ <- char '['
+  interTokenSpace
+  xs <- sepEndBy schemeExpression interTokenSpace
+  _ <- char ']'
+  return $ if null xs then Nil else List xs
+
+-- | Parse a symbol (anything not matching above, but not starting with #)
+symbol :: Parser Value
 symbol = do
-  first <- letter <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!'
+  first <- letter <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!' <|> char '?'
   rest <- many (letter <|> digit <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!' <|> char '?')
-  return $ T.pack (first:rest)
+  return $ Symbol $ T.pack (first:rest)
 
 -- | Legacy tokenizer for debugging (kept for compatibility)
 tokenize :: String -> Either SchemeError [Token]
@@ -143,6 +148,8 @@ tokenize input = case runParser tokenizer () "" input of
 data Token
   = TLParen
   | TRParen
+  | TLBracket
+  | TRBracket
   | TQuote
   | TString Text
   | TNumber Double
@@ -152,18 +159,20 @@ data Token
 
 -- | Legacy tokenizer parser
 tokenizer :: Parser [Token]
-tokenizer = skipWhitespaceOrComment *> sepEndBy schemeToken skipWhitespaceOrComment <* eof
+tokenizer = interTokenSpace *> sepEndBy schemeToken interTokenSpace <* eof
 
 -- | Legacy single token parser
 schemeToken :: Parser Token
 schemeToken = choice
   [ char '(' >> return TLParen
   , char ')' >> return TRParen
+  , char '[' >> return TLBracket
+  , char ']' >> return TRBracket
   , char '\'' >> return TQuote
-  , TString <$> stringLiteral
-  , TNumber <$> number
-  , TBool <$> boolean
-  , TSymbol <$> symbol
+  , TString <$> (do char '"'; content <- many (noneOf "\""); char '"'; return $ T.pack content)
+  , TNumber <$> numberToken
+  , TBool <$> (choice [try (string "#t") >> return True, try (string "#f") >> return False])
+  , TSymbol <$> (do first <- letter <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!' <|> char '?'; rest <- many (letter <|> digit <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!' <|> char '?'); return $ T.pack (first:rest))
   ]
 
 -- | Legacy expression parser from tokens
@@ -177,6 +186,7 @@ parseTokens tokens = case parseExpression tokens of
 parseExpression :: [Token] -> Either SchemeError (Value, [Token])
 parseExpression [] = Left $ ParseError "Unexpected end of input"
 parseExpression (TLParen:rest) = parseList rest
+parseExpression (TLBracket:rest) = parseBracketList rest
 parseExpression (TQuote:rest) = parseQuote rest
 parseExpression (TString s:rest) = Right (String s, rest)
 parseExpression (TNumber n:rest) = Right (Number n, rest)
@@ -193,6 +203,15 @@ parseList tokens = do
   (rest, tokens'') <- parseListRest tokens'
   return (List (first:rest), tokens'')
 
+-- | Legacy parse bracket list from tokens
+parseBracketList :: [Token] -> Either SchemeError (Value, [Token])
+parseBracketList [] = Left $ ParseError "Unclosed bracket"
+parseBracketList (TRBracket:rest) = Right (Nil, rest)
+parseBracketList tokens = do
+  (first, tokens') <- parseExpression tokens
+  (rest, tokens'') <- parseBracketListRest tokens'
+  return (List (first:rest), tokens'')
+
 -- | Legacy parse list rest from tokens
 parseListRest :: [Token] -> Either SchemeError ([Value], [Token])
 parseListRest [] = Left $ ParseError "Unclosed parenthesis"
@@ -200,6 +219,15 @@ parseListRest (TRParen:rest) = Right ([], rest)
 parseListRest tokens = do
   (expr, tokens') <- parseExpression tokens
   (rest, tokens'') <- parseListRest tokens'
+  return (expr:rest, tokens'')
+
+-- | Legacy parse bracket list rest from tokens
+parseBracketListRest :: [Token] -> Either SchemeError ([Value], [Token])
+parseBracketListRest [] = Left $ ParseError "Unclosed bracket"
+parseBracketListRest (TRBracket:rest) = Right ([], rest)
+parseBracketListRest tokens = do
+  (expr, tokens') <- parseExpression tokens
+  (rest, tokens'') <- parseBracketListRest tokens'
   return (expr:rest, tokens'')
 
 -- | Legacy parse quote from tokens

@@ -15,13 +15,38 @@ Exports:
 module Scheme.Evaluator
   ( evaluate
   , applyFunction
+  , evaluateQuote
+  , evaluateIf
+  , evaluateLambda
+  , evaluateLet
+  , evaluateCond
   ) where
 
 import Scheme.Core (Environment, Value(..), SchemeError(..))
 import Scheme.Environment (lookupVar, lookupVarWithRecursion, extendEnv)
+import Scheme.FreeVars (freeVarsInBody, captureFreeVars)
 import Scheme.Builtins
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Set (Set)
+import qualified Data.Set as Set
+import qualified Data.Map.Strict as Map
+
+-- | Type alias for special form handlers
+type SpecialFormHandler = Environment -> [Value] -> Either SchemeError Value
+
+-- | Dispatch table for special forms
+specialForms :: Map.Map Text SpecialFormHandler
+specialForms = Map.fromList
+  [ (T.pack "quote", const evaluateQuote)
+  , (T.pack "if", evaluateIf)
+  , (T.pack "define", evaluateDefine)
+  , (T.pack "lambda", evaluateLambda)
+  , (T.pack "let", evaluateLet)
+  , (T.pack "cond", evaluateCond)
+  , (T.pack "begin", evaluateBegin)
+  -- Add more as needed
+  ]
 
 -- | Main evaluation function
 evaluate :: Environment -> Value -> Either SchemeError Value
@@ -40,13 +65,10 @@ evaluate env val = case val of
   
   -- Function application and special forms
   List [] -> Right Nil
-  List (Symbol s:args)
-    | s == T.pack "quote" -> evaluateQuote args
-    | s == T.pack "if" -> evaluateIf env args
-    | s == T.pack "define" -> evaluateDefine env args
-    | s == T.pack "lambda" -> evaluateLambda env args
-    | s == T.pack "let" -> evaluateLet env args
-    | s == T.pack "cond" -> evaluateCond env args
+  List (Symbol s:args) ->
+    case Map.lookup s specialForms of
+      Just handler -> handler env args
+      Nothing -> evaluateApplication env (Symbol s) args
   List (func:args) -> evaluateApplication env func args
 
 -- | Evaluate a quoted expression
@@ -77,7 +99,11 @@ evaluateDefine env [Symbol name, expr] = do
   Right $ Symbol name  -- Return the symbol name
 evaluateDefine env [List (Symbol name:params), body] = do
   paramNames <- mapM extractSymbol params
-  let func = Function name [body] paramNames env
+  -- Find free variables in the function body
+  let freeVarSet = freeVarsInBody [body] paramNames
+  -- Create minimal environment with only referenced variables
+  let minimalEnv = captureFreeVars env freeVarSet
+  let func = OptimizedFunction name [body] paramNames minimalEnv
   Right $ Symbol name
 evaluateDefine _ args = Left $ WrongNumberOfArgs (T.pack "define") (length args) 2
 
@@ -85,7 +111,11 @@ evaluateDefine _ args = Left $ WrongNumberOfArgs (T.pack "define") (length args)
 evaluateLambda :: Environment -> [Value] -> Either SchemeError Value
 evaluateLambda env [List params, body] = do
   paramNames <- mapM extractSymbol params
-  Right $ Function (T.pack "lambda") [body] paramNames env
+  -- Find free variables in the function body
+  let freeVarSet = freeVarsInBody [body] paramNames
+  -- Create minimal environment with only referenced variables
+  let minimalEnv = captureFreeVars env freeVarSet
+  Right $ OptimizedFunction (T.pack "lambda") [body] paramNames minimalEnv
 evaluateLambda _ args = Left $ WrongNumberOfArgs (T.pack "lambda") (length args) 2
 
 -- | Evaluate a let expression
@@ -108,6 +138,10 @@ evaluateCond env (List (Symbol s:exprs):rest)
         _ -> mapM (evaluate env) exprs >>= return . last
 evaluateCond _ args = Left $ RuntimeError "Invalid cond clause"
 
+-- | Evaluate a begin expression
+evaluateBegin :: Environment -> [Value] -> Either SchemeError Value
+evaluateBegin env exprs = mapM (evaluate env) exprs >>= return . last
+
 -- | Evaluate a function application
 evaluateApplication :: Environment -> Value -> [Value] -> Either SchemeError Value
 evaluateApplication env func args = do
@@ -122,7 +156,19 @@ evaluateApplication env func args = do
     Primitive _ primFunc -> primFunc evalArgs
     Function name body params funcEnv -> applyFunction name body params funcEnv evalArgs
     RecursiveFunction name body params funcEnv -> applyFunction name body params funcEnv evalArgs
+    OptimizedFunction name body params freeVars -> applyOptimizedFunction name body params freeVars evalArgs
     _ -> Left $ TypeError $ "Not a function: " ++ show funcVal
+
+-- | Apply an optimized user-defined function
+applyOptimizedFunction :: Text -> [Value] -> [Text] -> Environment -> [Value] -> Either SchemeError Value
+applyOptimizedFunction name body params freeVars args
+  | length params /= length args = 
+      Left $ WrongNumberOfArgs name (length args) (length params)
+  | otherwise = do
+      -- Create environment with parameters and free variables
+      let paramEnv = zip params args
+      let newEnv = paramEnv ++ freeVars  -- Parameters shadow free variables
+      mapM (evaluate newEnv) body >>= return . last
 
 -- | Apply a user-defined function
 applyFunction :: Text -> [Value] -> [Text] -> Environment -> [Value] -> Either SchemeError Value

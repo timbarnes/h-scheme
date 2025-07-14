@@ -9,6 +9,7 @@ Exports:
   - Core types: Value, Environment, SchemeError
   - Evaluation functions: eval, evalString, evalFile
   - Environment management: emptyEnv, extendEnv, lookupVar
+  - Free variable analysis: freeVars, freeVarsInBody, captureFreeVars
   - Built-in functions: builtins
   - Utilities: showValue
 -}
@@ -29,6 +30,11 @@ module Scheme
   , extendEnv
   , lookupVar
   
+  -- * Free variable analysis
+  , freeVars
+  , freeVarsInBody
+  , captureFreeVars
+  
   -- * Built-in functions
   , builtins
   
@@ -40,8 +46,11 @@ import Scheme.Core
 import Scheme.Parser
 import Scheme.Evaluator
 import Scheme.Environment
+import Scheme.FreeVars
+import Scheme.DefineHandler
 import Scheme.Builtins
 import Debug.Trace (trace)
+import qualified Data.Text as T
 
 -- Re-export main functionality
 eval :: Environment -> Value -> Either SchemeError Value
@@ -50,7 +59,7 @@ eval = evaluate
 evalString :: String -> Either SchemeError Value
 evalString input = do
   exprs <- parseMany input
-  evalMany emptyEnv exprs
+  evalMany builtins exprs
 
 -- Evaluate a sequence of expressions, returning the last result
 evalMany :: Environment -> [Value] -> Either SchemeError Value
@@ -63,4 +72,6 @@ evalMany env (x:xs) = case evaluate env x of
 evalFile :: FilePath -> IO (Either SchemeError Value)
 evalFile path = do
   content <- readFile path
-  return $ evalString content
+  case parseMany content of
+    Left err -> return $ Left err
+    Right exprs -> return $ evalManyWithDefines builtins exprs

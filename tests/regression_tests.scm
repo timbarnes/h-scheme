@@ -4,18 +4,18 @@
 ;; Test framework helper functions
 (define (assert-equal expected actual test-name)
   (if (= expected actual)
-      (display "PASS: ") (display test-name) (newline)
-      (display "FAIL: ") (display test-name) (display " - expected ") (display expected) (display ", got ") (display actual) (newline)))
+      (begin (display "PASS: ") (display test-name) (newline))
+      (begin (display "FAIL: ") (display test-name) (display " - expected ") (display expected) (display ", got ") (display actual) (newline))))
 
 (define (assert-true condition test-name)
   (if condition
-      (display "PASS: ") (display test-name) (newline)
-      (display "FAIL: ") (display test-name) (display " - expected true") (newline)))
+      (begin (display "PASS: ") (display test-name) (newline))
+      (begin (display "FAIL: ") (display test-name) (display " - expected true") (newline))))
 
 (define (assert-false condition test-name)
   (if (= condition #f)
-      (display "PASS: ") (display test-name) (newline)
-      (display "FAIL: ") (display test-name) (display " - expected false") (newline)))
+      (begin (display "PASS: ") (display test-name) (newline))
+      (begin (display "FAIL: ") (display test-name) (display " - expected false") (newline))))
 
 (define (assert-error expr test-name)
   (display "TEST: ") (display test-name) (display " - should produce error") (newline)
@@ -275,6 +275,42 @@
 ;; Conditional expressions
 (define conditional-result (if (> 5 3) (+ 1 2) (* 4 5)))
 (assert-equal 3 conditional-result "Complex: conditional arithmetic")
+
+;; ============================================================================
+;; CLOSURE OPTIMIZATION TESTS
+;; ============================================================================
+
+(display "\n=== CLOSURE OPTIMIZATION TESTS ===\n")
+
+;; Unused variables should not affect closure
+(define unused-a 111)
+(define unused-b 222)
+(define used-x 7)
+(define (closure-test y) (+ y used-x))
+(assert-equal 10 (closure-test 3) "Closure: only referenced variable captured")
+
+;; Changing unused variables should not affect closure
+(set! unused-a 999)
+(set! unused-b 888)
+(assert-equal 10 (closure-test 3) "Closure: unaffected by unused variable mutation")
+
+;; Nested closures only capture what they reference
+(define outer-var 100)
+(define (make-adder n)
+  (lambda (m) (+ n m outer-var)))
+(define add5 (make-adder 5))
+(assert-equal 115 (add5 10) "Nested closure: captures outer and parameter")
+
+;; Changing outer-var after closure creation should affect closure
+(set! outer-var 200)
+(assert-equal 205 (add5 0) "Nested closure: reflects updated referenced variable")
+
+;; Recursive closure still works
+(define (rec-fact n)
+  (if (= n 0) 1 (* n (rec-fact (- n 1)))))
+(assert-equal 120 (rec-fact 5) "Recursive closure: factorial")
+
+(display "Closure optimization tests completed.\n")
 
 ;; ============================================================================
 ;; TEST SUMMARY

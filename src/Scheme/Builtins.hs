@@ -45,6 +45,7 @@ builtins =
   , (T.pack "list", Primitive (T.pack "list") list)
   , (T.pack "display", Primitive (T.pack "display") display)
   , (T.pack "newline", Primitive (T.pack "newline") newline)
+  , (T.pack "begin", Primitive (T.pack "begin") begin)
   ]
 
 -- | Arithmetic functions
@@ -169,6 +170,12 @@ display args = Left $ WrongNumberOfArgs (T.pack "display") (length args) 1
 newline :: [Value] -> Either SchemeError Value
 newline [] = Right $ String $ T.pack "\n"
 newline args = Left $ WrongNumberOfArgs (T.pack "newline") (length args) 0
+
+-- | Begin function: evaluates all arguments from left to right, returns the last
+begin :: [Value] -> Either SchemeError Value
+begin [] = Right Nil
+begin [x] = Right x
+begin args = Right $ head $ reverse args
 
 -- | Helper function to convert values to numbers
 toNumber :: Value -> Either SchemeError Double
