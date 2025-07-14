@@ -32,17 +32,9 @@ freeVars val = case val of
   Bool _ -> Set.empty
   Nil -> Set.empty
   Quote _ -> Set.empty  -- Quoted expressions don't evaluate variables
-  
-  -- Variables are free unless they're parameters
   Symbol name -> Set.singleton name
-  
-  -- For lists, collect free variables from all elements
   List elements -> Set.unions (map freeVars elements)
-  
-  -- Functions and primitives don't have free variables in their definition
   Function _ _ _ _ -> Set.empty
-  RecursiveFunction _ _ _ _ -> Set.empty
-  OptimizedFunction _ _ _ _ -> Set.empty
   Primitive _ _ -> Set.empty
 
 -- | Find free variables in a function body, excluding parameters

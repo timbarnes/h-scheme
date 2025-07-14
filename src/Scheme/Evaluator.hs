@@ -106,7 +106,7 @@ evaluateDefine env (List (Symbol name:params):bodyExprs) = do
   let body = if length bodyExprs == 1 
              then head bodyExprs 
              else List (Symbol (T.pack "begin") : bodyExprs)
-  let func = RecursiveFunction name [body] paramNames env
+  let func = Function name [body] paramNames env
   Right $ Symbol name
 evaluateDefine _ args = Left $ WrongNumberOfArgs (T.pack "define") (length args) 2
 
@@ -114,7 +114,7 @@ evaluateDefine _ args = Left $ WrongNumberOfArgs (T.pack "define") (length args)
 evaluateLambda :: Environment -> [Value] -> Either SchemeError Value
 evaluateLambda env [List params, body] = do
   paramNames <- mapM extractSymbol params
-  let func = RecursiveFunction (T.pack "lambda") [body] paramNames env
+  let func = Function (T.pack "lambda") [body] paramNames env
   Right func
 evaluateLambda _ args = Left $ WrongNumberOfArgs (T.pack "lambda") (length args) 2
 
@@ -157,7 +157,6 @@ evaluateApplication env func args = do
   case funcVal of
     Primitive _ primFunc -> primFunc evalArgs
     Function name body params funcEnv -> applyFunction name body params funcEnv evalArgs
-    RecursiveFunction name body params funcEnv -> applyFunction name body params funcEnv evalArgs
     _ -> Left $ TypeError $ "Not a function: " ++ show funcVal
 
 -- | Apply a user-defined function

@@ -1,2 +1,4 @@
-; A simple comment
-42 
+(display "Hello, World!")
+(newline)
+(display (+ 1 2))
+(newline) 

@@ -17,7 +17,6 @@ Exports:
 
 module Scheme.Parser
   ( parse
-  , tokenize
   , schemeFile
   , parseMany
   ) where
@@ -68,8 +67,7 @@ parseMany input =
 -- | Parse a Scheme expression
 schemeExpression :: Parser Value
 schemeExpression = choice
-  [ lexeme boolean
-  , lexeme number
+  [ lexeme number
   , lexeme stringLiteral
   , lexeme quoted
   , lexeme listExpression
@@ -79,20 +77,21 @@ schemeExpression = choice
 -- | Parse a number for tokenization (returns Double)
 numberToken :: Parser Double
 numberToken = do
+  sign <- option ' ' (char '-' <|> char '+')
   digits <- many1 digit
   decimal <- option "" (char '.' >> many1 digit)
-  return $ read (digits ++ decimal)
+  let numStr = case sign of
+        '-' -> "-" ++ digits ++ decimal
+        '+' -> digits ++ decimal
+        ' ' -> digits ++ decimal
+        _ -> digits ++ decimal
+  return $ read numStr
 
 -- | Parse a number
 number :: Parser Value
-number = Number <$> numberToken
+number = Number <$> try numberToken
 
--- | Parse a boolean literal
-boolean :: Parser Value
-boolean = choice
-  [ try (string "#t") >> return (Bool True)
-  , try (string "#f") >> return (Bool False)
-  ]
+
 
 -- | Parse a string literal
 stringLiteral :: Parser Value
@@ -131,107 +130,12 @@ brackets = do
   _ <- char ']'
   return $ if null xs then Nil else List xs
 
--- | Parse a symbol (anything not matching above, but not starting with #)
+-- | Parse a symbol (including #t and #f)
 symbol :: Parser Value
-symbol = do
-  first <- letter <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!' <|> char '?'
-  rest <- many (letter <|> digit <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!' <|> char '?')
-  return $ Symbol $ T.pack (first:rest)
-
--- | Legacy tokenizer for debugging (kept for compatibility)
-tokenize :: String -> Either SchemeError [Token]
-tokenize input = case runParser tokenizer () "" input of
-  Left err -> Left $ ParseError $ show err
-  Right tokens -> Right tokens
-
--- | Token type for parsing (legacy)
-data Token
-  = TLParen
-  | TRParen
-  | TLBracket
-  | TRBracket
-  | TQuote
-  | TString Text
-  | TNumber Double
-  | TBool Bool
-  | TSymbol Text
-  deriving (Show, Eq)
-
--- | Legacy tokenizer parser
-tokenizer :: Parser [Token]
-tokenizer = interTokenSpace *> sepEndBy schemeToken interTokenSpace <* eof
-
--- | Legacy single token parser
-schemeToken :: Parser Token
-schemeToken = choice
-  [ char '(' >> return TLParen
-  , char ')' >> return TRParen
-  , char '[' >> return TLBracket
-  , char ']' >> return TRBracket
-  , char '\'' >> return TQuote
-  , TString <$> (do char '"'; content <- many (noneOf "\""); char '"'; return $ T.pack content)
-  , TNumber <$> numberToken
-  , TBool <$> (choice [try (string "#t") >> return True, try (string "#f") >> return False])
-  , TSymbol <$> (do first <- letter <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!' <|> char '?'; rest <- many (letter <|> digit <|> char '+' <|> char '-' <|> char '*' <|> char '/' <|> char '=' <|> char '<' <|> char '>' <|> char '!' <|> char '?'); return $ T.pack (first:rest))
-  ]
-
--- | Legacy expression parser from tokens
-parseTokens :: [Token] -> Either SchemeError Value
-parseTokens tokens = case parseExpression tokens of
-  Left err -> Left $ ParseError $ show err
-  Right (expr, []) -> Right expr
-  Right (expr, rest) -> Left $ ParseError $ "Unexpected tokens: " ++ show rest
-
--- | Legacy parse expression from tokens
-parseExpression :: [Token] -> Either SchemeError (Value, [Token])
-parseExpression [] = Left $ ParseError "Unexpected end of input"
-parseExpression (TLParen:rest) = parseList rest
-parseExpression (TLBracket:rest) = parseBracketList rest
-parseExpression (TQuote:rest) = parseQuote rest
-parseExpression (TString s:rest) = Right (String s, rest)
-parseExpression (TNumber n:rest) = Right (Number n, rest)
-parseExpression (TBool b:rest) = Right (Bool b, rest)
-parseExpression (TSymbol s:rest) = Right (Symbol s, rest)
-parseExpression (t:rest) = Left $ ParseError $ "Unexpected token: " ++ show t
-
--- | Legacy parse list from tokens
-parseList :: [Token] -> Either SchemeError (Value, [Token])
-parseList [] = Left $ ParseError "Unclosed parenthesis"
-parseList (TRParen:rest) = Right (Nil, rest)
-parseList tokens = do
-  (first, tokens') <- parseExpression tokens
-  (rest, tokens'') <- parseListRest tokens'
-  return (List (first:rest), tokens'')
-
--- | Legacy parse bracket list from tokens
-parseBracketList :: [Token] -> Either SchemeError (Value, [Token])
-parseBracketList [] = Left $ ParseError "Unclosed bracket"
-parseBracketList (TRBracket:rest) = Right (Nil, rest)
-parseBracketList tokens = do
-  (first, tokens') <- parseExpression tokens
-  (rest, tokens'') <- parseBracketListRest tokens'
-  return (List (first:rest), tokens'')
-
--- | Legacy parse list rest from tokens
-parseListRest :: [Token] -> Either SchemeError ([Value], [Token])
-parseListRest [] = Left $ ParseError "Unclosed parenthesis"
-parseListRest (TRParen:rest) = Right ([], rest)
-parseListRest tokens = do
-  (expr, tokens') <- parseExpression tokens
-  (rest, tokens'') <- parseListRest tokens'
-  return (expr:rest, tokens'')
-
--- | Legacy parse bracket list rest from tokens
-parseBracketListRest :: [Token] -> Either SchemeError ([Value], [Token])
-parseBracketListRest [] = Left $ ParseError "Unclosed bracket"
-parseBracketListRest (TRBracket:rest) = Right ([], rest)
-parseBracketListRest tokens = do
-  (expr, tokens') <- parseExpression tokens
-  (rest, tokens'') <- parseBracketListRest tokens'
-  return (expr:rest, tokens'')
-
--- | Legacy parse quote from tokens
-parseQuote :: [Token] -> Either SchemeError (Value, [Token])
-parseQuote tokens = do
-  (expr, rest) <- parseExpression tokens
-  return (Quote expr, rest) 
+symbol = try (do
+  s <- many1 (letter <|> digit <|> oneOf "+-*/=<>!?#")
+  return $ Symbol $ T.pack s)
+  <|> (do
+    c <- oneOf "+-*/=<>!?"
+    notFollowedBy (letter <|> digit <|> oneOf "+-*/=<>!?" )
+    return $ Symbol $ T.pack [c]) 

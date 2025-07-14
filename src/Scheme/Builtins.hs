@@ -17,6 +17,7 @@ Exports:
 
 module Scheme.Builtins
   ( builtins
+  , displayValue
   ) where
 
 import Scheme.Core (Value(..), SchemeError(..), Environment)
@@ -45,7 +46,6 @@ builtins =
   , (T.pack "list", Primitive (T.pack "list") list)
   , (T.pack "display", Primitive (T.pack "display") display)
   , (T.pack "newline", Primitive (T.pack "newline") newline)
-  , (T.pack "begin", Primitive (T.pack "begin") begin)
   ]
 
 -- | Arithmetic functions
@@ -85,9 +85,23 @@ divide (x:xs) = do
 
 -- | Comparison functions
 equal :: [Value] -> Either SchemeError Value
-equal args = do
-  nums <- mapM toNumber args
-  return $ Bool $ all (== head nums) (tail nums)
+equal [] = Right $ Bool True
+equal [x] = Right $ Bool True
+equal (x:xs) = case x of
+  Bool _ -> do
+    bools <- mapM toBool (x:xs)
+    return $ Bool $ all (== head bools) (tail bools)
+  Number _ -> do
+    nums <- mapM toNumber (x:xs)
+    return $ Bool $ all (== head nums) (tail nums)
+  String _ -> do
+    strings <- mapM toString (x:xs)
+    return $ Bool $ all (== head strings) (tail strings)
+  Nil -> return $ Bool $ all isNil (x:xs)
+  List _ -> do
+    lists <- mapM toList (x:xs)
+    return $ Bool $ all (== head lists) (tail lists)
+  _ -> Left $ TypeError $ "Cannot compare values of type " ++ show x
 
 lessThan :: [Value] -> Either SchemeError Value
 lessThan args = do
@@ -164,20 +178,43 @@ list args = Right $ List args
 
 -- | I/O functions
 display :: [Value] -> Either SchemeError Value
-display [x] = Right $ String $ T.pack $ show x
+display [x] = Right $ String $ T.pack $ displayValue x
 display args = Left $ WrongNumberOfArgs (T.pack "display") (length args) 1
+
+-- | Helper function to display values without quotes (unlike show)
+displayValue :: Value -> String
+displayValue (String s) = T.unpack s
+displayValue (Number n) = show n
+displayValue (Bool True) = "#t"
+displayValue (Bool False) = "#f"
+displayValue Nil = "()"
+displayValue (List xs) = "(" ++ unwords (map displayValue xs) ++ ")"
+displayValue (Symbol s) = T.unpack s
+displayValue (Quote expr) = "'" ++ displayValue expr
+displayValue (Function name _ _ _) = "<function:" ++ T.unpack name ++ ">"
+displayValue (Primitive name _) = "<primitive:" ++ T.unpack name ++ ">"
 
 newline :: [Value] -> Either SchemeError Value
 newline [] = Right $ String $ T.pack "\n"
 newline args = Left $ WrongNumberOfArgs (T.pack "newline") (length args) 0
 
--- | Begin function: evaluates all arguments from left to right, returns the last
-begin :: [Value] -> Either SchemeError Value
-begin [] = Right Nil
-begin [x] = Right x
-begin args = Right $ head $ reverse args
-
--- | Helper function to convert values to numbers
+-- | Helper functions to convert values to specific types
 toNumber :: Value -> Either SchemeError Double
 toNumber (Number n) = Right n
-toNumber x = Left $ TypeError $ "Expected number, got " ++ show x 
+toNumber x = Left $ TypeError $ "Expected number, got " ++ show x
+
+toBool :: Value -> Either SchemeError Bool
+toBool (Bool b) = Right b
+toBool x = Left $ TypeError $ "Expected boolean, got " ++ show x
+
+toString :: Value -> Either SchemeError Text
+toString (String s) = Right s
+toString x = Left $ TypeError $ "Expected string, got " ++ show x
+
+toList :: Value -> Either SchemeError [Value]
+toList (List xs) = Right xs
+toList x = Left $ TypeError $ "Expected list, got " ++ show x
+
+isNil :: Value -> Bool
+isNil Nil = True
+isNil _ = False 

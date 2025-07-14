@@ -1,0 +1,1 @@
+""If no FAIL messages appear, all tests passed!\n""

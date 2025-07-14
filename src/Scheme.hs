@@ -59,7 +59,9 @@ eval = evaluate
 evalString :: String -> Either SchemeError Value
 evalString input = do
   exprs <- parseMany input
-  evalMany builtins exprs
+  case evalManyWithDefines builtins exprs of
+    Left err -> Left err
+    Right (_, val) -> Right val
 
 -- Evaluate a sequence of expressions, returning the last result
 evalMany :: Environment -> [Value] -> Either SchemeError Value
@@ -74,4 +76,8 @@ evalFile path = do
   content <- readFile path
   case parseMany content of
     Left err -> return $ Left err
-    Right exprs -> return $ evalManyWithDefines builtins exprs
+    Right exprs -> do
+      result <- return $ evalManyWithDefines builtins exprs
+      case result of
+        Left err -> return $ Left err
+        Right (_, val) -> return $ Right val

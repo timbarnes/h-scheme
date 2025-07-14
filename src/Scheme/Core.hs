@@ -34,9 +34,7 @@ data Value
   | Bool Bool               -- ^ Boolean values
   | List [Value]            -- ^ Lists (including function calls)
   | Nil                     -- ^ Empty list
-  | Function { funcName :: Text, funcBody :: [Value], funcParams :: [Text], funcEnv :: Environment }
-  | RecursiveFunction { recName :: Text, recBody :: [Value], recParams :: [Text], recEnv :: Environment }
-  | OptimizedFunction { optName :: Text, optBody :: [Value], optParams :: [Text], optFreeVars :: Environment }
+  | Function { recName :: Text, funBody :: [Value], funParams :: [Text], funEnv :: Environment }
   | Primitive { primName :: Text, primFunc :: [Value] -> Either SchemeError Value }
   | Quote Value             -- ^ Quoted expressions
  
@@ -48,8 +46,6 @@ instance Eq Value where
   (List a) == (List b) = a == b
   Nil == Nil = True
   (Function n1 b1 p1 _) == (Function n2 b2 p2 _) = n1 == n2 && b1 == b2 && p1 == p2
-  (RecursiveFunction n1 b1 p1 _) == (RecursiveFunction n2 b2 p2 _) = n1 == n2 && b1 == b2 && p1 == p2
-  (OptimizedFunction n1 b1 p1 _) == (OptimizedFunction n2 b2 p2 _) = n1 == n2 && b1 == b2 && p1 == p2
   (Primitive n1 _) == (Primitive n2 _) = n1 == n2
   (Quote a) == (Quote b) = a == b
   _ == _ = False
@@ -81,10 +77,7 @@ showValue (List (x:xs)) =
   case x of
     Symbol s | s == T.pack "quote" -> T.pack "'" <> showValue (head xs)
     _ -> T.pack "(" <> T.intercalate (T.pack " ") (map showValue (x:xs)) <> T.pack ")"
-showValue (Function name _ _ _) = T.pack $ "<function:" ++ T.unpack name ++ ">"
-showValue (RecursiveFunction name body params _) = 
+showValue (Function name body params _) = 
   T.pack $ "<recursive-function:" ++ T.unpack name ++ " params:" ++ show params ++ " body:" ++ show body ++ ">"
-showValue (OptimizedFunction name _ params _) = 
-  T.pack $ "<optimized-function:" ++ T.unpack name ++ " params:" ++ show params ++ ">"
 showValue (Primitive name _) = T.pack $ "<primitive:" ++ T.unpack name ++ ">"
 showValue (Quote v) = T.pack "'" <> showValue v 

@@ -12,32 +12,39 @@ Exports:
   - main: Main entry point for the executable
   - runRepl: Start the interactive REPL
   - runFile: Execute a Scheme file
-  - handleDefine: Handle define expressions with environment updates
-  - readMultiLine: Read multi-line input until complete
-  - inspect: Debug function to examine variable definitions
+  - handleEOF: Handle EOF errors during input
+  - readCompleteInput: Read multi-line input until complete
+  - loop: Main REPL loop (now uses unified input accumulation)
+  - replaceVar: Replace a variable in the environment (assumes it exists)
+  - extractSymbol: Helper function to extract symbol from a value
+  - isIncompleteInput: Check if a parse error indicates incomplete input
 -}
 
-module Main where
+module Main (main, runRepl, runFile, handleEOF, readCompleteInput, loop, replaceVar, extractSymbol, isIncompleteInput) where
 
 import Scheme
 import Scheme.Parser
-import Scheme.Core (Value(..), SchemeError(..), Environment)
-import Scheme.Environment (defineVar, lookupVar)
-import Scheme.Evaluator (applyFunction)
-import Scheme.DefineHandler (handleDefine)
+import Scheme.Builtins (displayValue)
+import Scheme.DefineHandler (evalManyWithDefines)
 import System.IO
 import System.Environment
 import Data.Text (Text)
-import qualified Data.Text as T
 import Data.List (isInfixOf)
+import System.IO.Error (isEOFError)
+import Control.Exception (catch, IOException)
 
 main :: IO ()
 main = do
   args <- getArgs
   case args of
-    [] -> runRepl
-    [filename] -> runFile filename
+    [] -> catch runRepl handleEOF
+    [filename] -> catch (runFile filename) handleEOF
     _ -> putStrLn "Usage: scheme [filename]"
+
+handleEOF :: IOException -> IO ()
+handleEOF e
+  | isEOFError e = return ()
+  | otherwise    = ioError e
 
 -- | Run the REPL
 runRepl :: IO ()
@@ -47,41 +54,49 @@ runRepl = do
   putStrLn ""
   loop builtins
 
--- | Main REPL loop
+-- | Unified input accumulation: reads lines/chunks until parentheses are balanced
+readCompleteInput :: IO String
+readCompleteInput = go "" True 0
+  where
+    go acc isFirst parenCount = do
+      if isFirst
+        then putStr "scheme> "
+        else putStr "  "
+      hFlush stdout
+      line <- getLine
+      let fullInput = if null acc then line else acc ++ "\n" ++ line
+          newParenCount = parenCount + countParens line
+      if newParenCount > 0 || (newParenCount == 0 && null fullInput)
+        then go fullInput False newParenCount
+        else if newParenCount < 0
+          then do
+            putStrLn "Error: Too many closing parentheses."
+            return ""
+          else return fullInput
+    
+    countParens :: String -> Int
+    countParens = foldl update 0
+      where
+        update n '(' = n + 1
+        update n ')' = n - 1
+        update n  _  = n
+
+-- | Main REPL loop (now uses unified input accumulation)
 loop :: Environment -> IO ()
 loop env = do
-  putStr "scheme> "
-  hFlush stdout
-  input <- readMultiLine ""
+  input <- readCompleteInput
   case input of
     "(quit)" -> putStrLn "Goodbye!"
     "" -> loop env
     _ -> do
-      case Scheme.Parser.parse input of
-        Left err -> 
-          if isIncompleteInput err
-            then putStrLn ("Error: " ++ show err) >> loop env
-            else putStrLn ("Error: " ++ show err) >> loop env
-        Right expr ->
-          case handleDefine env expr of
+      case Scheme.Parser.parseMany input of
+        Left err -> putStrLn ("Error: " ++ show err) >> loop env
+        Right exprs ->
+          case Scheme.DefineHandler.evalManyWithDefines env exprs of
             Left err -> putStrLn ("Error: " ++ show err) >> loop env
-            Right (newEnv, val) -> 
-              case val of
-                List (Symbol s:args)
-                  | s == T.pack "inspect" -> case args of
-                      [Symbol name] -> do
-                        case lookupVar newEnv name of
-                          Left err -> putStrLn ("Variable not found: " ++ show err) >> loop newEnv
-                          Right val -> putStrLn (show val) >> loop newEnv
-                      _ -> putStrLn "Error: inspect requires one symbol argument" >> loop newEnv
-                  | s == T.pack "tokens" -> case args of
-                      [String input] -> do
-                        case tokenize (T.unpack input) of
-                          Left err -> putStrLn ("Tokenization error: " ++ show err) >> loop newEnv
-                          Right tokens -> putStrLn ("Tokens: " ++ show tokens) >> loop newEnv
-                      _ -> putStrLn "Error: tokens requires one string argument" >> loop newEnv
-                  | otherwise -> putStrLn (show val) >> loop newEnv
-                _ -> putStrLn (show val) >> loop newEnv
+            Right (newEnv, val) -> do
+              putStrLn (displayValue val)
+              loop newEnv
 
 -- | Handle define expressions by updating the environment
 -- handleDefine env (List (Symbol s:args))
@@ -94,10 +109,10 @@ loop env = do
 --         val <- eval envWithPlaceholder expr
 --         -- Step 3: If it's a function, create a recursive function
 --         let finalVal = case val of
---               Function _ body params _ -> RecursiveFunction name body params envWithPlaceholder
+--               Function _ body params _ -> Function name body params envWithPlaceholder
 --               OptimizedFunction _ body params freeVars -> 
 --                 -- For recursive optimized functions, we need to include the function itself
---                 let recursiveFreeVars = (name, RecursiveFunction name body params envWithPlaceholder) : freeVars
+--                 let recursiveFreeVars = (name, Function name body params envWithPlaceholder) : freeVars
 --                 in OptimizedFunction name body params recursiveFreeVars
 --               _ -> val
 --         -- Step 4: Replace the placeholder with the actual function in the same environment
@@ -138,20 +153,6 @@ replaceVar ((var, val):rest) name newVal
   | var == name = (var, newVal) : rest
   | otherwise = (var, val) : replaceVar rest name newVal
 
--- | Create a placeholder function that can be called recursively
-createRecursivePlaceholder :: Text -> Environment -> Value
-createRecursivePlaceholder name env = 
-  Primitive (T.pack $ "recursive-" ++ T.unpack name) 
-    (\args -> 
-      -- Look up the actual function in the environment
-      case lookupVar env name of
-        Left _ -> Left $ RuntimeError $ "Function " ++ T.unpack name ++ " not yet defined"
-        Right (Function _ body params funcEnv) -> 
-          -- Apply the actual function
-          applyFunction name body params funcEnv args
-        Right _ -> Left $ TypeError $ T.unpack name ++ " is not a function"
-    )
-
 -- | Helper function to extract symbol from a value
 extractSymbol :: Value -> Either SchemeError Text
 extractSymbol (Symbol name) = Right name
@@ -163,21 +164,7 @@ runFile filename = do
   result <- evalFile filename
   case result of
     Left err -> putStrLn $ "Error: " ++ show err
-    Right val -> putStrLn $ show val 
-
--- | Read multi-line input, continuing until input is complete
-readMultiLine :: String -> IO String
-readMultiLine acc = do
-  line <- getLine
-  let fullInput = acc ++ line
-  case Scheme.Parser.parse fullInput of
-    Right _ -> return fullInput  -- Successfully parsed, input is complete
-    Left err -> 
-      if isIncompleteInput err
-        then do
-          putStr "  "  -- Indent continuation lines
-          readMultiLine (fullInput ++ "\n")
-        else return fullInput  -- Real error, return what we have
+    Right val -> putStrLn $ displayValue val 
 
 -- | Check if a parse error indicates incomplete input
 isIncompleteInput :: SchemeError -> Bool

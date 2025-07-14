@@ -32,9 +32,9 @@ handleDefine env (List (Symbol s:args))
         -- paramsList is a list of parameter symbols
         paramNames <- mapM extractSymbol paramsList
         let body = bodyExpr
-        let recEnv = let closure = RecursiveFunction name [body] paramNames recEnv
+        let recEnv = let closure = Function name [body] paramNames recEnv
                      in defineVar env name closure
-        let closure = RecursiveFunction name [body] paramNames recEnv
+        let closure = Function name [body] paramNames recEnv
         let newEnv = defineVar env name closure
         return (newEnv, Symbol name)
       [Symbol name, expr@(List (Symbol lam:paramListAndBody))] | lam == T.pack "lambda" -> do
@@ -42,9 +42,9 @@ handleDefine env (List (Symbol s:args))
           (List ps : body) -> do
             paramNames <- mapM extractSymbol ps
             let bodyVal = if null body then Nil else if length body == 1 then head body else List (Symbol (T.pack "begin") : body)
-            let recEnv = let closure = RecursiveFunction name [bodyVal] paramNames recEnv
+            let recEnv = let closure = Function name [bodyVal] paramNames recEnv
                          in defineVar env name closure
-            let closure = RecursiveFunction name [bodyVal] paramNames recEnv
+            let closure = Function name [bodyVal] paramNames recEnv
             let newEnv = defineVar env name closure
             return (newEnv, Symbol name)
           _ -> Left $ TypeError "Malformed lambda in define"
@@ -57,9 +57,9 @@ handleDefine env (List (Symbol s:args))
         let body = if length bodyExprs == 1 
                    then head bodyExprs 
                    else List (Symbol (T.pack "begin") : bodyExprs)
-        let recEnv = let closure = RecursiveFunction name [body] paramNames recEnv
+        let recEnv = let closure = Function name [body] paramNames recEnv
                      in defineVar env name closure
-        let closure = RecursiveFunction name [body] paramNames recEnv
+        let closure = Function name [body] paramNames recEnv
         let newEnv = defineVar env name closure
         return (newEnv, Symbol name)
       _ -> Left $ WrongNumberOfArgs (T.pack "define") (length args) 2

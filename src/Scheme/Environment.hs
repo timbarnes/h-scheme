@@ -50,9 +50,9 @@ lookupVar ((var, val):rest) name
 lookupVarWithRecursion :: Environment -> Text -> Either SchemeError Value
 lookupVarWithRecursion env name = 
   case lookupVar env name of
-    Right (RecursiveFunction n body params funcEnv) -> 
+    Right (Function n body params funcEnv) -> 
       -- For recursive functions, ensure they can find themselves
-      Right (RecursiveFunction n body params env)
+      Right (Function n body params env)
     Right val -> Right val
     Left err -> Left err
 
