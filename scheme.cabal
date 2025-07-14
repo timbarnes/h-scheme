@@ -2,16 +2,14 @@ cabal-version:      3.0
 name:               scheme
 version:            1.0.0.0
 license:            MIT
-author:             Scheme Interpreter
-maintainer:         scheme@example.com
+author:             Tim Barnes
+maintainer:         tw@timandmarina.com
 build-depends:      base
                   , text
                   , parsec
                   , containers
 default-language:   Haskell2010
-ghc-options:        -Wall -Wcompat -Widentities -Wincomplete-record-updates
-                   -Wincomplete-uni-patterns -Wmissing-export-lists
-                   -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+
 
 executable scheme
     main-is:         Main.hs
@@ -21,3 +19,54 @@ executable scheme
                    , text
                    , parsec
                    , containers 
+    ghc-options:   -Wall -Wcompat -Widentities -Wincomplete-record-updates
+                   -Wincomplete-uni-patterns -Wmissing-export-lists
+                   -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+    other-modules:
+        Scheme
+        Scheme.Builtins
+        Scheme.Core
+        Scheme.DefineHandler
+        Scheme.Environment
+        Scheme.Evaluator
+        Scheme.FreeVars
+        Scheme.Parser
+
+library
+  exposed-modules:
+      Scheme
+      Scheme.Builtins
+      Scheme.Core
+      Scheme.DefineHandler
+      Scheme.Environment
+      Scheme.Evaluator
+      Scheme.FreeVars
+      Scheme.Parser
+  hs-source-dirs: src
+  build-depends: base >=4.14 && <5,
+                 HUnit,
+                 text,
+                 parsec,
+                 containers
+  default-language: Haskell2010
+
+-- Parser test suite
+
+test-suite parser-tests
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      src tests
+  main-is:             parser_tests.hs
+  build-depends:       base, HUnit, text, parsec, scheme
+  other-modules:
+      Scheme.Core
+      Scheme.Parser
+  default-language:    Haskell2010
+
+-- Regression test suite (shell script runner)
+
+test-suite regression-tests
+  type:                exitcode-stdio-1.0
+  main-is:             run_tests.hs
+  hs-source-dirs:      src tests
+  build-depends:       base, process
+  default-language:    Haskell2010 
