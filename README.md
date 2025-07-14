@@ -8,8 +8,9 @@ A minimal but efficient Scheme interpreter implemented in Haskell, designed to b
 - **Self-evaluating expressions**: numbers, strings, booleans
 - **Variables**: symbol lookup and binding
 - **Quoting**: `quote` and `'` syntax
-- **Function application**: `(function arg1 arg2 ...)`
-- **Special forms**: `if`, `define`, `lambda`, `let`, `cond`
+- **Function application**: `(function arg1 arg2 ...)` or `[function arg1 arg2 ...]`
+- **List delimiters**: Supports both parentheses `( ... )` and square brackets `[ ... ]` interchangeably for lists, function calls, and special forms
+- **Special forms**: `if`, `define`, `lambda`, `let`, `cond`, `begin`, `set!`, `quote`
 
 ### Built-in Functions
 
@@ -57,40 +58,42 @@ cabal run scheme -- path/to/file.scm
 ### Basic Arithmetic
 ```scheme
 (+ 1 2 3)           ; => 6
-(* 4 5)             ; => 20
+[* 4 5]             ; => 20
 (/ 10 2)            ; => 5.0
 ```
 
 ### List Operations
 ```scheme
-(cons 1 (cons 2 (cons 3 ())))  ; => (1 2 3)
-(car (list 1 2 3))             ; => 1
+(cons 1 (cons 2 (cons 3 [])))  ; => (1 2 3)
+(car [1 2 3])                  ; => 1
 (cdr (list 1 2 3))             ; => (2 3)
-(length (list 1 2 3))          ; => 3
+(length [1 2 3])               ; => 3
 ```
 
 ### Conditionals
 ```scheme
 (if (> 5 3) "yes" "no")        ; => "yes"
-(if (< 5 3) "yes" "no")        ; => "no"
+(if [< 5 3] "yes" "no")        ; => "no"
 ```
 
 ### Function Definition
 ```scheme
 (define square (lambda (x) (* x x)))
 (square 5)                      ; => 25
+(define [add x y] [+ x y])
+(add 2 3)                       ; => 5
 ```
 
 ### Let Expressions
 ```scheme
-(let ((x 5) (y 3)) (+ x y))    ; => 8
+(let [] 42)                    ; => 42
 ```
 
 ### Cond Expressions
 ```scheme
 (cond
-  ((> x 0) "positive")
-  ((< x 0) "negative")
+  ([> x 0] "positive")
+  ([< x 0] "negative")
   (else "zero"))
 ```
 
@@ -99,7 +102,7 @@ cabal run scheme -- path/to/file.scm
 The interpreter is organized into several modules:
 
 - **`Scheme.Core`**: Core data types and value representation
-- **`Scheme.Parser`**: Lexical analysis and parsing
+- **`Scheme.Parser`**: Lexical analysis and parsing (supports both ( ) and [ ] for lists)
 - **`Scheme.Evaluator`**: Expression evaluation and function application
 - **`Scheme.Environment`**: Variable binding and lookup
 - **`Scheme.Builtins`**: Built-in function implementations
@@ -113,6 +116,15 @@ The interpreter is designed to be easily extended:
 2. **Add built-in functions**: Add to the `builtins` list in `Scheme.Builtins`
 3. **Improve parsing**: Enhance the parser in `Scheme.Parser`
 4. **Optimize environments**: Replace the simple list-based environment with more efficient data structures
+
+## Testing
+
+- The `tests/` directory contains only the regression test suite, parser tests, and required test runner files.
+- Run all tests with:
+  ```bash
+  cabal test
+  ```
+- The regression suite (`regression_tests.scm`) covers all major features, including both `(`...`)` and `[`...`]` list delimiters.
 
 ## Future Enhancements
 
